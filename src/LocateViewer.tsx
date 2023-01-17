@@ -1,24 +1,29 @@
+import { Button, ButtonGroup, CircularProgress } from '@mui/material';
 import axios from 'axios';
 import React, { useEffect, useState, useMemo } from 'react';
+import CustomizedTables from './CustomizedTables';
 
 const baseUrl = "https://9g7qfsq0qk.execute-api.us-east-1.amazonaws.com/v1/session";
 
-function LocateViewer() {
+export function LocateViewer() {
     const [sessionId, setSessionId] = useState(null);
-    const [requiredLocates, setRequiredLocates] = useState({});
-    const [availableLocates, setAvailableLocates] = useState({});
+    const [requiredLocates, setRequiredLocates] = useState<any>({});
+    const [availableLocates, setAvailableLocates] = useState<any>({});
     const [symbolSubs, setSymbolSubs] = useState<any>({});
     const [percentMap, setPercentMap] = useState<any>({});
+    const [isAllocated, setIsAllocated] = useState<boolean>(false);
+    const [isFetching, setIsFetching] = useState<boolean>(false);
+
 
     const updateServer = useMemo(() => async (updateMachinesBody: any) => {
         try {
             await axios.put(`${baseUrl}/${sessionId}/locates`, JSON.stringify(updateMachinesBody))
-            alert('success') 
+            alert('success')
         } catch (error) {
             alert('error')
         }
     }, [sessionId])
-    
+
     useEffect(() => {
         // Create a new session when the component mounts
         axios.post(baseUrl)
@@ -43,17 +48,19 @@ function LocateViewer() {
         updateServer(updateMachinesBody)
     }, [percentMap, sessionId, requiredLocates, updateServer])
 
-    
-    const handleLocatesRequirementsRequestClick = () => {
+
+    const handleLocatesRequirementsRequestClick = async () => {
         // Retrieve the locate requests when the button is clicked
-        axios.get(`${baseUrl}/${sessionId}/locates`)
-            .then(response => {
-                console.log(response.data);
-                setRequiredLocates(response.data);
-            })
-            .catch(error => {
-                console.error(error);
-            });
+        try {
+            setIsFetching(true)
+            const locatesRes = await axios.get(`${baseUrl}/${sessionId}/locates`)
+            setRequiredLocates(locatesRes.data);
+            setIsAllocated(false)
+        } catch (error) {
+            console.error(error);
+        } finally {
+            setIsFetching(false)
+        }
     };
 
     const arrangeLocatesToMap = (requiredLocates: any) => {
@@ -74,87 +81,77 @@ function LocateViewer() {
     }
 
     const handleAllocateRequiredLocatesRequestClick = async () => {
-        const symbolLocatesMap: any = arrangeLocatesToMap(requiredLocates)
-        setSymbolSubs(symbolLocatesMap)
+        try {
+            setIsFetching(true)
+            const symbolLocatesMap: any = arrangeLocatesToMap(requiredLocates)
+            setSymbolSubs(symbolLocatesMap)
 
-        // Fetch all symbols
-        const allocateReqList = Object.keys(symbolLocatesMap).map(symbol =>
-            axios.post(`${baseUrl}/${sessionId}/broker?symbol=${symbol}&quantity=${symbolLocatesMap[symbol].total}`))
-        const responseList = await Promise.all(allocateReqList)
-
-        // Create (symbol -> available locates got) map
-        const _availableLocates: any = {}
-        for (const symbolRes of responseList) {
-            if (symbolRes.status === 200) {
-                if (!_availableLocates[symbolRes.data.symbol]) {
-                    _availableLocates[symbolRes.data.symbol] = 0
+            // Fetch all symbols
+            const allocateReqList = Object.keys(symbolLocatesMap).map(symbol =>
+                axios.post(`${baseUrl}/${sessionId}/broker?symbol=${symbol}&quantity=${symbolLocatesMap[symbol].total}`))
+            const responseList = await Promise.all(allocateReqList)
+            // Create (symbol -> available locates got) map
+            const _availableLocates: any = {}
+            for (const symbolRes of responseList) {
+                if (symbolRes.status === 200) {
+                    if (!_availableLocates[symbolRes.data.symbol]) {
+                        _availableLocates[symbolRes.data.symbol] = 0
+                    }
+                    _availableLocates[symbolRes.data.symbol] += symbolRes.data.quantity
                 }
-                _availableLocates[symbolRes.data.symbol] += symbolRes.data.quantity
+            }
+            setAvailableLocates(_availableLocates)
+
+            // Calculate percent map
+            const percentMap: any = {}
+            Object.keys(_availableLocates).map(symbol =>
+                percentMap[symbol] = (_availableLocates[symbol] / symbolLocatesMap[symbol].total * 100).toFixed(2))
+            setPercentMap(percentMap)
+            setIsAllocated(true)
+        } catch (error) {
+            setIsAllocated(false)
+        } finally {
+            setIsFetching(false)
+        }
+    }
+
+    const table1Headers = ['Machine', 'Symbol', 'Required Locates', 'Available Locates'];
+    const table1Rows: any[] = Object.entries(requiredLocates).map(([machine, symbols]: any, i) => {
+        for (const symbol in symbols) {
+            return {
+                machine,
+                symbol,
+                symbolRequiredLocates: symbols[symbol],
+                symbolAvilableLocates: percentMap[symbol] ? Math.floor(percentMap[symbol] / 100 * symbols[symbol]) : 'NaN'
             }
         }
-        setAvailableLocates(_availableLocates)
+    })
 
-        // Calculate percent map
-        const percentMap: any = {}
-        Object.keys(_availableLocates).map(symbol =>
-            percentMap[symbol] = (_availableLocates[symbol] / symbolLocatesMap[symbol].total * 100).toFixed(2))
-        setPercentMap(percentMap)
-    }
+    const table2Headers = ['Symbol', 'Available Locates', 'Equal shared by %', 'machines'];
+    const table2Rows: any[] = Object.entries(availableLocates).map(([symbol, avilableLocatesVal]: any, i) => {
+        return {
+            symbol,
+            avilableLocatesVal,
+            avilablePrecent: `${percentMap[symbol]}%`,
+            locatesLength: Object.keys(symbolSubs[symbol].subscribers).length
+        }
+    })
 
     return (
         <>
             <div>locate viewer</div>
             <h1>Session ID: {sessionId}</h1>
-            <button onClick={handleLocatesRequirementsRequestClick}>Retrieve Locates Requirements</button>
-            <button onClick={handleAllocateRequiredLocatesRequestClick}>Allocate Required Locates</button>
-            <div>
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Machine</th>
-                            <th>Symbol</th>
-                            <th>Required Locates</th>
-                            <th>Available Locates</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {Object.entries(requiredLocates).map(([machine, symbols], i) => (
-                            <>
-                                {Object.entries(symbols as any).map(([symbol, requiredLocates], j) => (
-                                    <tr key={j}>
-                                        <td>{machine}</td>
-                                        <td>{symbol}</td>
-                                        <td>{requiredLocates as number}</td>
-                                        <td>{Math.floor(requiredLocates as number * percentMap[symbol] / 100)}</td>
-                                    </tr>
-                                ))}
-                            </>
-                        ))}
-                    </tbody>
-                </table>
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Symbol</th>
-                            <th>Available Locates</th>
-                            <th>Equal shared by %</th>
-                            <th>machines</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {Object.entries(availableLocates).map(([symbol, avilableLocates]) =>
-                            <tr>
-                                <td>{symbol}</td>
-                                <td>{avilableLocates as number}</td>
-                                <td>{percentMap[symbol]}%</td>
-                                <td>{Object.keys(symbolSubs[symbol].subscribers).length}</td>
-                            </tr>
-                        )}
-                    </tbody>
-                </table>
+            <ButtonGroup variant="outlined" aria-label="outlined button group">
+                <Button onClick={handleLocatesRequirementsRequestClick} disabled={isFetching} >Retrieve Locates Requirements</Button>
+                <Button onClick={handleAllocateRequiredLocatesRequestClick} disabled={isAllocated || isFetching}>Allocate Required Locates</Button>
+                {isFetching &&
+                    <CircularProgress style={{ width: '30px', height: '30px', marginLeft: '10px', alignSelf: 'center' }} />
+                }
+            </ButtonGroup>
+            <div style={{ display: 'flex' }}>
+                <CustomizedTables key={'table1'} headerList={table1Headers} rows={table1Rows} />
+                <CustomizedTables key={'table2'} headerList={table2Headers} rows={table2Rows} />
             </div>
         </>
     );
-}
-
-export default LocateViewer;
+};
